@@ -288,27 +288,27 @@ static void cmd_local_bind_all(void)
 static void print_help(void)
 {
     printf("\n");
-    printf("  ╔══════════════════════════════════════════════════════════════╗\n");
-    printf("  ║              USB/IP Client Command Reference                 ║\n");
-    printf("  ╠══════════════════╦═══════════════════════════════════════════╣\n");
-    printf("  ║  REMOTE COMMANDS ║ (sent to Pi server at %s)          \n", g_server_ip);
-    printf("  ╠══════════════════╩═══════════════════════════════════════════╣\n");
-    printf("  ║  usbserver_init     load kernel modules + start usbipd       ║\n");
-    printf("  ║  list_usb           list USB devices on the Pi               ║\n");
-    printf("  ║  bind_all           bind all Pi USB devices for export        ║\n");
-    printf("  ║  bind_list          show currently bound devices on Pi        ║\n");
-    printf("  ║  bind_<busid>       bind specific device  e.g. bind_1-1      ║\n");
-    printf("  ╠══════════════════════════════════════════════════════════════╣\n");
-    printf("  ║  LOCAL COMMANDS  (run on THIS Windows machine)               ║\n");
-    printf("  ╠══════════════════════════════════════════════════════════════╣\n");
-    printf("  ║  local_list         usbip list -r <server_ip>                ║\n");
-    printf("  ║  local_bind_all     attach all remote devices to Windows      ║\n");
-    printf("  ║  local_bind_<id>    usbip attach -r <ip> -b <busid>          ║\n");
-    printf("  ║                     e.g. local_bind_1-1.1                    ║\n");
-    printf("  ╠══════════════════════════════════════════════════════════════╣\n");
-    printf("  ║  help               show this help                           ║\n");
-    printf("  ║  exit / quit        disconnect and close                     ║\n");
-    printf("  ╚══════════════════════════════════════════════════════════════╝\n");
+    printf("  +----------------------------------------------------------------+\n");
+    printf("  |           USB/IP Client Command Reference                      |\n");
+    printf("  +------------------+---------------------------------------------+\n");
+    printf("  | REMOTE COMMANDS  | sent to Pi server at %-22s |\n", g_server_ip);
+    printf("  +------------------+---------------------------------------------+\n");
+    printf("  |  usbserver_init     load kernel modules + start usbipd         |\n");
+    printf("  |  list_usb           list USB devices on the Pi                 |\n");
+    printf("  |  bind_all           bind all Pi USB devices for export          |\n");
+    printf("  |  bind_list          show currently bound devices on Pi          |\n");
+    printf("  |  bind_<busid>       bind specific device  e.g. bind_1-1        |\n");
+    printf("  +----------------------------------------------------------------+\n");
+    printf("  | LOCAL COMMANDS   (run on THIS Windows machine)                 |\n");
+    printf("  +----------------------------------------------------------------+\n");
+    printf("  |  local_list         usbip list -r <server_ip>                  |\n");
+    printf("  |  local_bind_all     attach all remote devices to Windows        |\n");
+    printf("  |  local_bind_<id>    usbip attach -r <ip> -b <busid>            |\n");
+    printf("  |                     e.g. local_bind_1-1.1                      |\n");
+    printf("  +----------------------------------------------------------------+\n");
+    printf("  |  help               show this help                             |\n");
+    printf("  |  exit / quit        disconnect and close                       |\n");
+    printf("  +----------------------------------------------------------------+\n");
     printf("\n");
 }
 
