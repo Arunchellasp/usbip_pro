@@ -260,6 +260,65 @@ static void cmd_local_bind_all(void)
     }
 }
 
+/*
+ * Detach every currently attached USB/IP port on this Windows machine.
+ * Uses:  usbip detach --all
+ */
+static void cmd_local_detach_all(void)
+{
+    printf("[pro_bind] Detaching all currently attached USB/IP ports...\n");
+    local_run("usbip detach --all");
+}
+
+/*
+ * pro_bind  –  full one-command sequence:
+ *   1. [local]  detach all already-attached USB/IP ports
+ *   2. [remote] send "pro_bind" to server
+ *               (server runs: usbserver_init -> list_usb -> bind_all)
+ *   3. [local]  list remote devices   (usbip list -r <ip>)
+ *   4. [local]  attach all remote devices to Windows
+ */
+static void cmd_pro_bind(SOCKET sock)
+{
+    printf("\n");
+    printf("  +----------------------------------------------------------+\n");
+    printf("  |  pro_bind  :  full USB/IP setup sequence                 |\n");
+    printf("  |  Step 1/4  :  detach existing local ports               |\n");
+    printf("  |  Step 2/4  :  server init + list + bind (remote)        |\n");
+    printf("  |  Step 3/4  :  list remote devices (local)               |\n");
+    printf("  |  Step 4/4  :  attach all remote devices (local)         |\n");
+    printf("  +----------------------------------------------------------+\n\n");
+
+    /* Step 1: detach already-attached ports */
+    printf("--- [1/4] Detach existing local ports ---\n");
+    cmd_local_detach_all();
+    printf("---\n\n");
+
+    /* Step 2: server-side init + list + bind */
+    printf("--- [2/4] Server: usbserver_init + list_usb + bind_all ---\n");
+    const char *remote_cmd = "pro_bind\n";
+    if (send_all(sock, remote_cmd, (int)strlen(remote_cmd)) != 0) {
+        fprintf(stderr, "[ERROR] send() failed: %d\n"
+                "        Connection to server may have been lost.\n",
+                WSAGetLastError());
+        return;
+    }
+    if (recv_response(sock) != 0) return;
+    printf("---\n\n");
+
+    /* Step 3: local list */
+    printf("--- [3/4] List remote devices ---\n");
+    cmd_local_list();
+    printf("---\n\n");
+
+    /* Step 4: local attach all */
+    printf("--- [4/4] Attach all remote devices to Windows ---\n");
+    cmd_local_bind_all();
+    printf("---\n\n");
+
+    printf("[pro_bind] Done.\n\n");
+}
+
 /* ── Help text ──────────────────────────────────────────────────── */
 static void print_help(void)
 {
@@ -284,6 +343,11 @@ static void print_help(void)
     printf("  +------------------------------------------------------------------+\n");
     printf("  |  help               show this help                               |\n");
     printf("  |  exit / quit        disconnect and close                         |\n");
+    printf("  +------------------------------------------------------------------+\n");
+    printf("  | ONE-COMMAND SETUP                                                 |\n");
+    printf("  +------------------------------------------------------------------+\n");
+    printf("  |  pro_bind           detach local ports, then server-side         |\n");
+    printf("  |                     init+list+bind, then local list+attach       |\n");
     printf("  +------------------------------------------------------------------+\n");
     printf("\n");
 }
@@ -380,6 +444,10 @@ int main(int argc, char *argv[])
             else {
                 printf("---\n"); cmd_local_bind_busid(busid); printf("---\n\n");
             }
+            continue;
+        }
+        if (_stricmp(cmd, "pro_bind") == 0) {
+            cmd_pro_bind(sock);
             continue;
         }
         if (_strnicmp(cmd, "local", 5) == 0) {

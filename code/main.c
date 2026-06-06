@@ -272,6 +272,139 @@ static void cmd_bind_list(int sock)
     send_response(sock, result);
 }
 
+/* ── Command: pro_bind ──────────────────────────────────────────── */
+/*
+ * All-in-one server-side sequence:
+ *   1. usbserver_init  (load modules + start usbipd)
+ *   2. list_usb        (show available USB devices)
+ *   3. bind_all        (bind every device for export)
+ *
+ * All output is collected into one response terminated by a single
+ * END_OF_RESPONSE sentinel.
+ */
+static void cmd_pro_bind(int sock)
+{
+    char *result = (char *)calloc(1, OUT_BUF_SIZE);
+    if (!result) {
+        send_response(sock, "ERROR: out of memory\n");
+        return;
+    }
+
+    char piece[OUT_BUF_SIZE / 2];
+    char line[256];
+    int  rc;
+
+    /* ═══ STEP 1: usbserver_init ══════════════════════════════════ */
+    buf_append(result, OUT_BUF_SIZE,
+               "=== STEP 1 : usbserver_init ===\n\n");
+
+    rc = run_cmd("sudo modprobe usbip_core", piece, sizeof(piece));
+    snprintf(line, sizeof(line), ">>> sudo modprobe usbip_core  (exit=%d)\n", rc);
+    buf_append(result, OUT_BUF_SIZE, line);
+    if (piece[0]) {
+        buf_append(result, OUT_BUF_SIZE, piece);
+        if (result[strlen(result) - 1] != '\n')
+            buf_append(result, OUT_BUF_SIZE, "\n");
+    }
+    buf_append(result, OUT_BUF_SIZE, "\n");
+
+    rc = run_cmd("sudo modprobe usbip_host", piece, sizeof(piece));
+    snprintf(line, sizeof(line), ">>> sudo modprobe usbip_host  (exit=%d)\n", rc);
+    buf_append(result, OUT_BUF_SIZE, line);
+    if (piece[0]) {
+        buf_append(result, OUT_BUF_SIZE, piece);
+        if (result[strlen(result) - 1] != '\n')
+            buf_append(result, OUT_BUF_SIZE, "\n");
+    }
+    buf_append(result, OUT_BUF_SIZE, "\n");
+
+    buf_append(result, OUT_BUF_SIZE,
+               ">>> sudo pkill -x usbipd  (cleanup old instance)\n");
+    (void)system("sudo pkill -x usbipd 2>/dev/null; sleep 0.3");
+
+    buf_append(result, OUT_BUF_SIZE,
+               ">>> sudo usbipd -D  (launching daemon in background)\n");
+    rc = system("sudo usbipd -D &");
+    snprintf(line, sizeof(line), "    system() returned: %d\n", rc);
+    buf_append(result, OUT_BUF_SIZE, line);
+    sleep(1);
+
+    rc = run_cmd("pgrep -x usbipd", piece, sizeof(piece));
+    if (rc == 0 && piece[0]) {
+        char pid[32] = "";
+        sscanf(piece, "%31s", pid);
+        snprintf(line, sizeof(line), "    usbipd running (PID %s)\n\n", pid);
+    } else {
+        snprintf(line, sizeof(line),
+                 "    WARNING: usbipd not running!\n"
+                 "    Try: sudo usbipd -D\n\n");
+    }
+    buf_append(result, OUT_BUF_SIZE, line);
+
+    /* ═══ STEP 2: list_usb ════════════════════════════════════════ */
+    buf_append(result, OUT_BUF_SIZE,
+               "=== STEP 2 : list_usb ===\n\n");
+
+    rc = run_cmd("usbip list -l", piece, sizeof(piece));
+    snprintf(line, sizeof(line), ">>> usbip list -l  (exit=%d)\n", rc);
+    buf_append(result, OUT_BUF_SIZE, line);
+    buf_append(result, OUT_BUF_SIZE, piece);
+    if (piece[0] && result[strlen(result) - 1] != '\n')
+        buf_append(result, OUT_BUF_SIZE, "\n");
+    buf_append(result, OUT_BUF_SIZE, "\n");
+
+    /* ═══ STEP 3: bind_all ════════════════════════════════════════ */
+    buf_append(result, OUT_BUF_SIZE,
+               "=== STEP 3 : bind_all ===\n\n");
+
+    char list_out[OUT_BUF_SIZE / 2];
+    run_cmd("usbip list -l", list_out, sizeof(list_out));
+    int found = 0;
+
+    char *ptr = list_out;
+    while (*ptr) {
+        char *nl = strchr(ptr, '\n');
+        size_t linelen = nl ? (size_t)(nl - ptr) : strlen(ptr);
+        char lbuf[512];
+        if (linelen >= sizeof(lbuf)) linelen = sizeof(lbuf) - 1;
+        memcpy(lbuf, ptr, linelen);
+        lbuf[linelen] = '\0';
+        ptr += linelen + (nl ? 1 : 0);
+
+        const char *marker = strstr(lbuf, "busid ");
+        if (!marker) continue;
+        marker += 6;
+
+        char busid[32];
+        size_t bidlen = 0;
+        while (*marker && *marker != ' ' && *marker != '(' &&
+               bidlen < sizeof(busid) - 1)
+            busid[bidlen++] = *marker++;
+        busid[bidlen] = '\0';
+        if (bidlen == 0 || !strchr(busid, '-')) continue;
+
+        char bind_cmd[128];
+        snprintf(bind_cmd, sizeof(bind_cmd), "sudo usbip bind -b %s", busid);
+        char bind_out[2048];
+        rc = run_cmd(bind_cmd, bind_out, sizeof(bind_out));
+
+        char entry[2048 + 128];
+        snprintf(entry, sizeof(entry),
+                 ">>> %s  (exit=%d)\n%s\n", bind_cmd, rc, bind_out);
+        buf_append(result, OUT_BUF_SIZE, entry);
+        found++;
+    }
+
+    if (found == 0)
+        buf_append(result, OUT_BUF_SIZE, "No USB devices found to bind.\n");
+
+    buf_append(result, OUT_BUF_SIZE,
+               "\n[pro_bind] Server-side complete.\n");
+
+    send_response(sock, result);
+    free(result);
+}
+
 /* ── Command dispatcher ─────────────────────────────────────────── */
 static void dispatch(int sock, const char *cmd)
 {
@@ -281,6 +414,7 @@ static void dispatch(int sock, const char *cmd)
     else if (strcmp(cmd, "list_usb")       == 0) cmd_list_usb(sock);
     else if (strcmp(cmd, "bind_all")       == 0) cmd_bind_all(sock);
     else if (strcmp(cmd, "bind_list")      == 0) cmd_bind_list(sock);
+    else if (strcmp(cmd, "pro_bind")       == 0) cmd_pro_bind(sock);
     else if (strncmp(cmd, "bind_", 5)      == 0) {
         const char *busid = cmd + 5;
         if (*busid == '\0')
@@ -292,7 +426,7 @@ static void dispatch(int sock, const char *cmd)
         snprintf(err, sizeof(err),
                  "ERROR: Unknown command '%s'.\n"
                  "Valid: usbserver_init, list_usb, bind_all, "
-                 "bind_list, bind_<busid>\n", cmd);
+                 "bind_list, bind_<busid>, pro_bind\n", cmd);
         send_response(sock, err);
     }
 }
