@@ -264,10 +264,78 @@ static void cmd_local_bind_all(void)
  * Detach every currently attached USB/IP port on this Windows machine.
  * Uses:  usbip detach --all
  */
+/*
+ * Detach every currently attached USB/IP port on this Windows machine.
+ *
+ * "usbip detach --all" is NOT valid on the Windows usbip build.
+ * Instead we run "usbip port", parse every "Port NN:" line,
+ * and call "usbip detach -p NN" for each one.
+ *
+ * usbip port output looks like:
+ *   Port 00: <status> at Full Speed(12Mbps)
+ *       ...
+ *   Port 01: <status> ...
+ */
 static void cmd_local_detach_all(void)
 {
-    printf("[pro_bind] Detaching all currently attached USB/IP ports...\n");
-    local_run("usbip detach --all");
+    printf("[detach] Checking for attached USB/IP ports...\n");
+    fflush(stdout);
+
+    FILE *fp = _popen("usbip port 2>&1", "r");
+    if (!fp) {
+        fprintf(stderr, "[detach] WARNING: could not run 'usbip port'\n");
+        return;
+    }
+
+    char   output[OUT_BUF_SIZE];
+    size_t total = 0;
+    char   line[512];
+    while (fgets(line, sizeof(line), fp) &&
+           total + strlen(line) < OUT_BUF_SIZE - 1) {
+        fputs(line, stdout);
+        size_t len = strlen(line);
+        memcpy(output + total, line, len);
+        total += len;
+    }
+    output[total] = '\0';
+    _pclose(fp);
+    fflush(stdout);
+
+    /* Parse "Port NN:" lines and detach each one */
+    int detached = 0;
+    const char *p = output;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;  /* skip leading whitespace */
+
+        if (strncmp(p, "Port ", 5) == 0) {
+            p += 5;
+            /* Read port number (up to 3 digits) */
+            char numstr[8];
+            int  nlen = 0;
+            while (*p && isdigit((unsigned char)*p) && nlen < 7)
+                numstr[nlen++] = *p++;
+            numstr[nlen] = '\0';
+
+            /* Must be followed by ':' to be a real port line */
+            if (nlen > 0 && *p == ':') {
+                char detach_cmd[64];
+                snprintf(detach_cmd, sizeof(detach_cmd),
+                         "usbip detach -p %s", numstr);
+                printf("\n");
+                local_run(detach_cmd);
+                detached++;
+            }
+        }
+
+        while (*p && *p != '\n') p++;  /* advance to next line */
+        if (*p == '\n') p++;
+    }
+
+    if (detached == 0)
+        printf("[detach] No attached USB/IP ports found.\n");
+    else
+        printf("\n[detach] Detached %d port(s).\n", detached);
+    fflush(stdout);
 }
 
 /*
