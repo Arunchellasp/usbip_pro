@@ -420,22 +420,129 @@ static void print_help(void)
     printf("\n");
 }
 
+/* ── Command dispatcher (shared by interactive + single-shot modes) ─ */
+/*
+ * Execute one command string on an open socket.
+ * Returns 0 to keep running, 1 to stop (exit/quit or fatal error).
+ */
+static int run_command(SOCKET sock, const char *cmd)
+{
+    if (_stricmp(cmd, "exit") == 0 || _stricmp(cmd, "quit") == 0) {
+        printf("[client] Disconnecting.\n");
+        return 1;
+    }
+    if (_stricmp(cmd, "help") == 0) {
+        print_help();
+        return 0;
+    }
+    if (_stricmp(cmd, "local_list") == 0) {
+        printf("---\n"); cmd_local_list(); printf("---\n\n");
+        return 0;
+    }
+    if (_stricmp(cmd, "local_bind_all") == 0) {
+        printf("---\n"); cmd_local_bind_all(); printf("---\n\n");
+        return 0;
+    }
+    if (_strnicmp(cmd, "local_bind_", 11) == 0) {
+        const char *busid = cmd + 11;
+        if (*busid == '\0')
+            fprintf(stderr,
+                    "[ERROR] Missing bus ID. Usage: local_bind_<busid>"
+                    "  e.g. local_bind_1-1.1\n");
+        else {
+            printf("---\n"); cmd_local_bind_busid(busid); printf("---\n\n");
+        }
+        return 0;
+    }
+    if (_stricmp(cmd, "pro_bind") == 0) {
+        cmd_pro_bind(sock);
+        return 0;
+    }
+    if (_strnicmp(cmd, "local", 5) == 0) {
+        fprintf(stderr,
+                "[ERROR] Unknown local command '%s'.\n"
+                "        Local commands: local_list, local_bind_all,"
+                " local_bind_<busid>\n", cmd);
+        return 0;
+    }
+
+    /* Remote command: send to server and wait for response */
+    char to_send[CMD_BUF_SIZE + 2];
+    snprintf(to_send, sizeof(to_send), "%s\n", cmd);
+    if (send_all(sock, to_send, (int)strlen(to_send)) != 0) {
+        fprintf(stderr,
+                "[ERROR] send() failed: %d\n"
+                "        The connection to the server may have been lost.\n",
+                WSAGetLastError());
+        return 1;
+    }
+    printf("---\n");
+    if (recv_response(sock) != 0) return 1;
+    printf("---\n\n");
+    return 0;
+}
+
 /* ── main ───────────────────────────────────────────────────────── */
+/*
+ * Usage (interactive):
+ *   client.exe <server_ip> [port]
+ *
+ * Usage (single-shot):
+ *   client.exe <server_ip> [port] <command>
+ *
+ * Examples:
+ *   client.exe 192.168.0.15 5000
+ *   client.exe 192.168.0.15 5000 pro_bind
+ *   client.exe 192.168.0.15 5000 list_usb
+ */
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s <server_ip> [port]  (default port: %d)\n",
-                argv[0], DEFAULT_PORT);
+        fprintf(stderr,
+                "Usage:\n"
+                "  %s <server_ip> [port]           interactive mode\n"
+                "  %s <server_ip> [port] <command> single-shot mode\n"
+                "\n"
+                "Examples:\n"
+                "  %s 192.168.0.15 5000\n"
+                "  %s 192.168.0.15 5000 pro_bind\n"
+                "  %s 192.168.0.15 5000 list_usb\n"
+                "\nDefault port: %d\n",
+                argv[0], argv[0], argv[0], argv[0], argv[0], DEFAULT_PORT);
         return 1;
     }
 
     strncpy(g_server_ip, argv[1], sizeof(g_server_ip) - 1);
     g_server_ip[sizeof(g_server_ip) - 1] = '\0';
 
-    g_port = (argc >= 3) ? atoi(argv[2]) : DEFAULT_PORT;
-    if (g_port <= 0 || g_port > 65535) {
-        fprintf(stderr, "Invalid port: %s\n", argv[2]);
-        return 1;
+    /*
+     * argv layout:
+     *   argv[1] = server_ip   (required)
+     *   argv[2] = port        (optional, numeric)
+     *   argv[3] = command     (optional, single-shot)
+     *
+     * If argv[2] is not a number it is treated as the command
+     * and the default port is used, so both of these work:
+     *   client.exe 192.168.0.15 pro_bind
+     *   client.exe 192.168.0.15 5000 pro_bind
+     */
+    const char *single_cmd = NULL;
+
+    if (argc >= 3 && atoi(argv[2]) > 0) {
+        /* argv[2] is a port number */
+        g_port = atoi(argv[2]);
+        if (g_port > 65535) {
+            fprintf(stderr, "Invalid port: %s\n", argv[2]);
+            return 1;
+        }
+        if (argc >= 4)
+            single_cmd = argv[3];   /* command follows port */
+    } else if (argc >= 3) {
+        /* argv[2] is not numeric — treat as command, use default port */
+        g_port     = DEFAULT_PORT;
+        single_cmd = argv[2];
+    } else {
+        g_port = DEFAULT_PORT;
     }
 
     WSADATA wsa;
@@ -474,75 +581,29 @@ int main(int argc, char *argv[])
         WSACleanup();
         return 1;
     }
-    printf("[client] Connected to %s:%d\n", g_server_ip, g_port);
-    print_help();
+    printf("[client] Connected to %s:%d\n\n", g_server_ip, g_port);
 
-    char cmd[CMD_BUF_SIZE];
-    while (1) {
-        printf("usbip> ");
-        fflush(stdout);
+    int exit_code = 0;
 
-        if (!fgets(cmd, sizeof(cmd), stdin)) break;
-        rtrim(cmd);
-        if (cmd[0] == '\0') continue;
-
-        /* ── Local / housekeeping commands (no socket needed) ── */
-        if (_stricmp(cmd, "exit") == 0 || _stricmp(cmd, "quit") == 0) {
-            printf("[client] Disconnecting.\n");
-            break;
+    if (single_cmd) {
+        /* ── Single-shot mode: run one command then exit ── */
+        printf("[client] Running command: %s\n\n", single_cmd);
+        run_command(sock, single_cmd);
+    } else {
+        /* ── Interactive mode: show help then read commands ── */
+        print_help();
+        char cmd[CMD_BUF_SIZE];
+        while (1) {
+            printf("usbip> ");
+            fflush(stdout);
+            if (!fgets(cmd, sizeof(cmd), stdin)) break;
+            rtrim(cmd);
+            if (cmd[0] == '\0') continue;
+            if (run_command(sock, cmd)) break;
         }
-        if (_stricmp(cmd, "help") == 0) {
-            print_help();
-            continue;
-        }
-        if (_stricmp(cmd, "local_list") == 0) {
-            printf("---\n"); cmd_local_list(); printf("---\n\n");
-            continue;
-        }
-        if (_stricmp(cmd, "local_bind_all") == 0) {
-            printf("---\n"); cmd_local_bind_all(); printf("---\n\n");
-            continue;
-        }
-        if (_strnicmp(cmd, "local_bind_", 11) == 0) {
-            const char *busid = cmd + 11;
-            if (*busid == '\0')
-                fprintf(stderr,
-                        "[ERROR] Missing bus ID. Usage: local_bind_<busid>"
-                        "  e.g. local_bind_1-1.1\n");
-            else {
-                printf("---\n"); cmd_local_bind_busid(busid); printf("---\n\n");
-            }
-            continue;
-        }
-        if (_stricmp(cmd, "pro_bind") == 0) {
-            cmd_pro_bind(sock);
-            continue;
-        }
-        if (_strnicmp(cmd, "local", 5) == 0) {
-            fprintf(stderr,
-                    "[ERROR] Unknown local command '%s'.\n"
-                    "        Local commands: local_list, local_bind_all,"
-                    " local_bind_<busid>\n", cmd);
-            continue;
-        }
-
-        /* ── Remote command: send to server ── */
-        char to_send[CMD_BUF_SIZE + 2];
-        snprintf(to_send, sizeof(to_send), "%s\n", cmd);
-        if (send_all(sock, to_send, (int)strlen(to_send)) != 0) {
-            fprintf(stderr,
-                    "[ERROR] send() failed: %d\n"
-                    "        The connection to the server may have been lost.\n",
-                    WSAGetLastError());
-            break;
-        }
-
-        printf("---\n");
-        if (recv_response(sock) != 0) break;
-        printf("---\n\n");
     }
 
     closesocket(sock);
     WSACleanup();
-    return 0;
+    return exit_code;
 }
